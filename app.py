@@ -127,4 +127,4 @@ if pdf_file and of_images:
     st.dataframe(styled_df, use_container_width=True)
 
     # Export CSV
-    csv = df.to_csv(index=False).encode("utf-8"_
+    csv = df.to_csv(index=False).encode("utf-8")
