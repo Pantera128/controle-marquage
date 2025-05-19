@@ -24,7 +24,7 @@ Il vérifie automatiquement :
 
 # Chargement des fichiers
 pdf_file = st.file_uploader("📄 Fichier PDF de marquage (1 seul)", type=["pdf"])
-of_images = st.file_uploader("🖼️ Photo(s) des Ordres de Fabrication (OF)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+of_images = st.file_uploader("🖼️ Photo(s) des Ordres de Fabrication (OF)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
 force_check = st.checkbox("🔍 Forcer la vérification même si certaines infos sont manquantes")
 
@@ -34,10 +34,11 @@ results = []
 def extract_text_from_image(image):
     return pytesseract.image_to_string(image)
 
-# Fonction lecture datamatrix
-def read_datamatrix(image):
-    codes = decode(image)
-    return [code.data.decode("utf-8") for code in codes]
+# Fonction lecture datamatrix avec pylibdmtx + OpenCV
+def read_datamatrix(pil_image):
+    cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    decoded_objects = decode_datamatrix(cv_image)
+    return [obj.data.decode("utf-8") for obj in decoded_objects]
 
 # Analyse texte OF
 def parse_of_text(text):
@@ -49,7 +50,8 @@ def parse_of_text(text):
     for ref in refs:
         lot_list = []
         for lot in lots:
-            if "-" in lot and lot.replace("-", "").isdigit():
+            # Gestion des plages de lots
+            if "-" in lot and all(part.isdigit() for part in lot.split("-")):
                 start, end = lot.split("-")
                 lot_list.extend([str(i) for i in range(int(start), int(end)+1)])
             else:
@@ -59,7 +61,7 @@ def parse_of_text(text):
                 data.append({"REF CLIENT": ref, "Lot": lot, "Date": date})
     return data
 
-# Analyse texte PDF
+# Analyse texte PDF avec cache
 @st.cache_data
 def extract_text_from_pdf(pdf_file):
     pdf_data = []
@@ -67,7 +69,7 @@ def extract_text_from_pdf(pdf_file):
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         pix = page.get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
         text = extract_text_from_image(img)
         datamatrix = read_datamatrix(img)
         pdf_data.append({
@@ -82,7 +84,7 @@ if pdf_file and of_images:
 
     of_data = []
     for image_file in of_images:
-        image = Image.open(image_file).convert("RGB")
+        image = Image.open(image_file)
         text = extract_text_from_image(image)
         parsed = parse_of_text(text)
         of_data.extend(parsed)
@@ -112,7 +114,7 @@ if pdf_file and of_images:
         if not match_found:
             results.append({"Page": i+1, "REF CLIENT": "❌", "Lot": "❌", "Date": "❌", "Datamatrix OK": "❌"})
 
-    # Affichage des résultats
+    # Affichage des résultats avec surlignage des erreurs
     df = pd.DataFrame(results)
     st.subheader("📋 Résultats du contrôle")
 
@@ -125,8 +127,4 @@ if pdf_file and of_images:
     st.dataframe(styled_df, use_container_width=True)
 
     # Export CSV
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("📤 Télécharger les résultats au format CSV", csv, "controle_resultats.csv", "text/csv")
-
-else:
-    st.warning("Veuillez charger à la fois un fichier PDF de marquage et au moins une image d'OF.")
+    csv = df.to_csv(index=False).encode("utf-8"_
