@@ -1,59 +1,44 @@
 import streamlit as st
 from PIL import Image
-import pytesseract
-import re
-import io
-import pandas as pd
 import fitz  # PyMuPDF
 
-st.title("🔍 Contrôle simple sans installation supplémentaire")
-
-pdf_file = st.file_uploader("Charge ton PDF marquage", type=["pdf"])
-of_images = st.file_uploader("Charge les photos OF (png/jpeg)", type=["png","jpg","jpeg"], accept_multiple_files=True)
+# Imports désactivés (commentés) pour la reconnaissance OCR et Datamatrix
+# from pylibdmtx.pylibdmtx import decode as decode_datamatrix
+# import pytesseract
 
 def extract_text(image):
-    return pytesseract.image_to_string(image)
+    # Désactivation temporaire : on ne fait rien et on retourne une chaîne vide
+    return ""
 
-def parse_of_text(text):
-    refs = re.findall(r"REF(?:\.\s?)?CLIENT\s*[:\-]?\s*(\S+)", text, re.IGNORECASE)
-    lots = re.findall(r"Lot\s*[:\-]?\s*([A-Z0-9\-/]+)", text, re.IGNORECASE)
-    dates = re.findall(r"\b(\d{6})\b", text)  # Date YYMMDD simplifiée
-    return refs, lots, dates
+def decode_datamatrix(image):
+    # Désactivation temporaire : on ne détecte aucun datamatrix
+    return []
 
-if pdf_file and of_images:
-    st.info("Analyse en cours...")
-
-    of_data = []
-    for img_file in of_images:
-        img = Image.open(img_file)
-        text = extract_text(img)
-        refs, lots, dates = parse_of_text(text)
-        of_data.append({"refs": refs, "lots": lots, "dates": dates})
-
+def load_pdf_page_as_image(pdf_file):
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    pdf_text = ""
-    for page in doc:
-        pix = page.get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
-        pdf_text += extract_text(img)
+    page = doc.load_page(0)
+    pix = page.get_pixmap()
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    return img
 
-    results = []
-    for entry in of_data:
-        for ref in entry["refs"]:
-            ref_ok = ref in pdf_text
-            for lot in entry["lots"]:
-                lot_ok = lot in pdf_text
-                for date in entry["dates"]:
-                    date_ok = date in pdf_text
-                    results.append({
-                        "REF CLIENT": ref,
-                        "Lot": lot,
-                        "Date": date,
-                        "Présent dans PDF": ref_ok and lot_ok and date_ok
-                    })
+st.title("Contrôle de marquage (version simplifiée)")
 
-    df = pd.DataFrame(results)
-    st.dataframe(df)
+uploaded_pdf = st.file_uploader("Importer un fichier PDF de marquage", type=["pdf"])
+uploaded_img = st.file_uploader("Importer une capture d'écran de l'OF (PNG, JPG)", type=["png", "jpg", "jpeg"])
 
-else:
-    st.warning("Charge à la fois un PDF et au moins une image OF.")
+if uploaded_pdf:
+    img_pdf = load_pdf_page_as_image(uploaded_pdf)
+    st.image(img_pdf, caption="Page PDF chargée", use_column_width=True)
+    text_pdf = extract_text(img_pdf)  # vide pour l'instant
+    st.write("Texte extrait du PDF (désactivé):", text_pdf)
+
+if uploaded_img:
+    img_of = Image.open(uploaded_img)
+    st.image(img_of, caption="Image OF chargée", use_column_width=True)
+    text_of = extract_text(img_of)  # vide pour l'instant
+    st.write("Texte extrait de l'OF (désactivé):", text_of)
+
+# Ici tu pourras ajouter plus tard la comparaison entre les textes ou autres contrôles
+
+st.info("La reconnaissance OCR et datamatrix est désactivée temporairement pour éviter les erreurs liées à l'environnement Streamlit Cloud.")
+
