@@ -2,57 +2,137 @@ import streamlit as st
 import pytesseract
 from PIL import Image
 import fitz  # PyMuPDF
-import cv2
-import numpy as np
-from pdf2image import convert_from_bytes
+from pyzbar.pyzbar import decode
+import re
+import io
+import pandas as pd
 
-st.title("🧐 Contrôle de calque de marquage")
+st.set_page_config(page_title="Contrôle de marquage", layout="wide")
+st.title("🧐 Contrôle automatique de calques de marquage")
 
-uploaded_pdf = st.file_uploader("📄 Upload du fichier PDF de marquage", type="pdf")
-uploaded_of = st.file_uploader("📸 Upload de la photo de l’Ordre de Fabrication (OF)", type=["png", "jpg", "jpeg"])
+st.markdown("""
+Ce programme compare les informations sur les **fichiers de marquage PDF** avec une **ou plusieurs photos d’Ordre de Fabrication (OF)**.
 
-if uploaded_pdf and uploaded_of:
-    st.success("Fichiers bien reçus 👍")
+Il vérifie automatiquement :
+- ✅ La Référence Client (REF CLIENT)
+- ✅ Le(s) Numéro(s) de lot (y compris les plages 210001-210005)
+- ✅ La date de production (format YYMMDD)
+- ✅ Le contenu du datamatrix
+""")
 
-    # Convertir la première page du PDF en image
-    pdf_images = convert_from_bytes(uploaded_pdf.read())
-    pdf_image = pdf_images[0]
-    pdf_text = pytesseract.image_to_string(pdf_image)
+# Chargement des fichiers
+pdf_file = st.file_uploader("📄 Fichier PDF de marquage (1 seul)", type=["pdf"])
+of_images = st.file_uploader("🖼️ Photo(s) des Ordres de Fabrication (OF)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-    # Lire la photo OF
-    of_image_pil = Image.open(uploaded_of).convert("RGB")
-    of_text = pytesseract.image_to_string(of_image_pil)
+force_check = st.checkbox("🔍 Forcer la vérification même si certaines infos sont manquantes")
 
-    # Affichage debug
-    st.subheader("🔍 Texte extrait du PDF de marquage")
-    st.text(pdf_text)
+results = []
 
-    st.subheader("🔍 Texte extrait de la photo de l'OF")
-    st.text(of_text)
+# Fonction OCR sur image
+def extract_text_from_image(image):
+    return pytesseract.image_to_string(image)
 
-    # Analyse QR/Datamatrix avec OpenCV
-    st.subheader("📦 Contenu du Datamatrix détecté")
+# Fonction lecture datamatrix
+def read_datamatrix(image):
+    codes = decode(image)
+    return [code.data.decode("utf-8") for code in codes]
 
-    of_np = np.array(of_image_pil)
-    gray = cv2.cvtColor(of_np, cv2.COLOR_RGB2GRAY)
+# Analyse texte OF
+def parse_of_text(text):
+    data = []
+    refs = re.findall(r"REF(?:\.\s?)?CLIENT\s*[:\-]?\s*(\S+)", text, re.IGNORECASE)
+    lot_matches = re.findall(r"Lot\s*[:\-]?\s*([A-Z0-9]+(?:-[A-Z0-9]+)?)(?:\s*/\s*CE[:\-]?\s*\d+)?", text, re.IGNORECASE)
+    dates = re.findall(r"(?:YYMMDD\s*[:\-]?|Date\s*[:\-]?)\s*(\d{6})", text, re.IGNORECASE)
 
-    detector = cv2.QRCodeDetector()
-    data, bbox, _ = detector.detectAndDecode(gray)
+    for ref in refs:
+        for lot in lot_matches:
+            lot_list = []
+            if re.match(r"^\d+-\d+$", lot):
+                start, end = map(int, lot.split("-"))
+                lot_list.extend([str(i) for i in range(start, end + 1)])
+            else:
+                lot_list.append(lot)
+            for lot_item in lot_list:
+                for date in dates:
+                    data.append({"REF CLIENT": ref, "Lot": lot_item, "Date": date})
+    return data
 
-    if data:
-        st.code(data, language="text")
-    else:
-        st.warning("⚠️ Aucun QR Code / Datamatrix détecté sur l'image de l'OF.")
+# Analyse texte PDF
+@st.cache_data
+def extract_text_from_pdf(pdf_file):
+    pdf_data = []
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        pix = page.get_pixmap()
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        text = extract_text_from_image(img)
+        datamatrix = read_datamatrix(img)
+        pdf_data.append({
+            "page": page_num + 1,
+            "text": text,
+            "datamatrix": datamatrix
+        })
+    return pdf_data
 
-    # Vérifications simples
-    ref_client_ok = "REF CLIENT" in pdf_text and "REF CLIENT" in of_text
-    lot_ok = "lot" in pdf_text.lower() and "lot" in of_text.lower()
-    date_ok = "date" in pdf_text.lower() and "date" in of_text.lower()
+if pdf_file and of_images:
+    st.info("🔄 Analyse des OF en cours...")
 
-    st.subheader("✅ Vérification automatique")
-    st.write(f"Réf client détectée : {'✅' if ref_client_ok else '❌'}")
-    st.write(f"N° de lot détecté : {'✅' if lot_ok else '❌'}")
-    st.write(f"Date détectée : {'✅' if date_ok else '❌'}")
+    of_data = []
+    for image_file in of_images:
+        image = Image.open(image_file)
+        text = extract_text_from_image(image)
+        parsed = parse_of_text(text)
+        of_data.extend(parsed)
+
+    # Liste des REF CLIENT disponibles
+    unique_refs = sorted(set(entry["REF CLIENT"] for entry in of_data))
+
+    selected_refs = st.multiselect("📌 Sélectionner une ou plusieurs références client à vérifier", unique_refs, default=unique_refs)
+
+    filtered_of_data = [entry for entry in of_data if entry["REF CLIENT"] in selected_refs]
+
+    st.info("📘 Analyse du PDF en cours...")
+    pdf_data = extract_text_from_pdf(pdf_file)
+
+    # Comparaison
+    for i, page in enumerate(pdf_data):
+        page_text = page["text"]
+        datamatrix = page["datamatrix"]
+        match_found = False
+
+        for entry in filtered_of_data:
+            ref_ok = entry["REF CLIENT"] in page_text
+            lot_ok = entry["Lot"] in page_text
+            date_ok = entry["Date"] in page_text
+            matrix_ok = all(
+                entry["Lot"] in dm and entry["Date"] in dm
+                for dm in datamatrix
+            ) if datamatrix else False
+
+            if ref_ok and lot_ok and date_ok and matrix_ok:
+                results.append({"Page": i + 1, **entry, "Datamatrix OK": "✅"})
+                match_found = True
+                break
+
+        if not match_found:
+            results.append({"Page": i + 1, "REF CLIENT": "❌", "Lot": "❌", "Date": "❌", "Datamatrix OK": "❌"})
+
+    # Affichage des résultats
+    df = pd.DataFrame(results)
+    st.subheader("📋 Résultats du contrôle")
+
+    def highlight_errors(val):
+        if val == "❌":
+            return 'background-color: #ffcccc; color: red; font-weight: bold'
+        return ''
+
+    styled_df = df.style.applymap(highlight_errors)
+    st.dataframe(styled_df, use_container_width=True)
+
+    # Export CSV
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📤 Télécharger les résultats au format CSV", csv, "controle_resultats.csv", "text/csv")
 
 else:
-    st.info("📥 Merci d’importer le PDF de marquage **et** la photo de l’OF.")
+    st.warning("Veuillez charger à la fois un fichier PDF de marquage et au moins une image d'OF.")
