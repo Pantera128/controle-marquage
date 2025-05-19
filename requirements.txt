@@ -4,3 +4,5 @@ pdf2image
 Pillow
 opencv-python-headless
 PyMuPDF
+opencv-python-headless
+pylibdmtx
