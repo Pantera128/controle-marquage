@@ -2,7 +2,9 @@ import streamlit as st
 import pytesseract
 from PIL import Image
 import fitz  # PyMuPDF
-from pyzbar.pyzbar import decode
+import cv2
+import numpy as np
+from pylibdmtx.pylibdmtx import decode as decode_datamatrix
 import re
 import io
 import pandas as pd
