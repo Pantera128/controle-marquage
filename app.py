@@ -22,7 +22,7 @@ Il vérifie automatiquement :
 
 # Chargement des fichiers
 pdf_file = st.file_uploader("📄 Fichier PDF de marquage (1 seul)", type=["pdf"])
-of_images = st.file_uploader("🖼️ Photo(s) des Ordres de Fabrication (OF)", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+of_images = st.file_uploader("🖼️ Photo(s) des Ordres de Fabrication (OF)", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
 force_check = st.checkbox("🔍 Forcer la vérification même si certaines infos sont manquantes")
 
@@ -41,20 +41,20 @@ def read_datamatrix(image):
 def parse_of_text(text):
     data = []
     refs = re.findall(r"REF(?:\.\s?)?CLIENT\s*[:\-]?\s*(\S+)", text, re.IGNORECASE)
-    lot_matches = re.findall(r"Lot\s*[:\-]?\s*([A-Z0-9]+(?:-[A-Z0-9]+)?)(?:\s*/\s*CE[:\-]?\s*\d+)?", text, re.IGNORECASE)
-    dates = re.findall(r"(?:YYMMDD\s*[:\-]?|Date\s*[:\-]?)\s*(\d{6})", text, re.IGNORECASE)
+    lots = re.findall(r"Lot\s*[:\-]?\s*([A-Z0-9\-/]+)(?:\s*/\s*CE[:\-]?\s*\d+)?", text, re.IGNORECASE)
+    dates = re.findall(r"YYMMDD[:\-]?\s*(\d{6})", text)
 
     for ref in refs:
-        for lot in lot_matches:
-            lot_list = []
-            if re.match(r"^\d+-\d+$", lot):
-                start, end = map(int, lot.split("-"))
-                lot_list.extend([str(i) for i in range(start, end + 1)])
+        lot_list = []
+        for lot in lots:
+            if "-" in lot and lot.replace("-", "").isdigit():
+                start, end = lot.split("-")
+                lot_list.extend([str(i) for i in range(int(start), int(end)+1)])
             else:
                 lot_list.append(lot)
-            for lot_item in lot_list:
-                for date in dates:
-                    data.append({"REF CLIENT": ref, "Lot": lot_item, "Date": date})
+        for lot in lot_list:
+            for date in dates:
+                data.append({"REF CLIENT": ref, "Lot": lot, "Date": date})
     return data
 
 # Analyse texte PDF
@@ -65,7 +65,7 @@ def extract_text_from_pdf(pdf_file):
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
         pix = page.get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
         text = extract_text_from_image(img)
         datamatrix = read_datamatrix(img)
         pdf_data.append({
@@ -76,23 +76,15 @@ def extract_text_from_pdf(pdf_file):
     return pdf_data
 
 if pdf_file and of_images:
-    st.info("🔄 Analyse des OF en cours...")
+    st.info("🔄 Analyse en cours...")
 
     of_data = []
     for image_file in of_images:
-        image = Image.open(image_file)
+        image = Image.open(image_file).convert("RGB")
         text = extract_text_from_image(image)
         parsed = parse_of_text(text)
         of_data.extend(parsed)
 
-    # Liste des REF CLIENT disponibles
-    unique_refs = sorted(set(entry["REF CLIENT"] for entry in of_data))
-
-    selected_refs = st.multiselect("📌 Sélectionner une ou plusieurs références client à vérifier", unique_refs, default=unique_refs)
-
-    filtered_of_data = [entry for entry in of_data if entry["REF CLIENT"] in selected_refs]
-
-    st.info("📘 Analyse du PDF en cours...")
     pdf_data = extract_text_from_pdf(pdf_file)
 
     # Comparaison
@@ -101,7 +93,7 @@ if pdf_file and of_images:
         datamatrix = page["datamatrix"]
         match_found = False
 
-        for entry in filtered_of_data:
+        for entry in of_data:
             ref_ok = entry["REF CLIENT"] in page_text
             lot_ok = entry["Lot"] in page_text
             date_ok = entry["Date"] in page_text
@@ -111,12 +103,12 @@ if pdf_file and of_images:
             ) if datamatrix else False
 
             if ref_ok and lot_ok and date_ok and matrix_ok:
-                results.append({"Page": i + 1, **entry, "Datamatrix OK": "✅"})
+                results.append({"Page": i+1, **entry, "Datamatrix OK": "✅"})
                 match_found = True
                 break
 
         if not match_found:
-            results.append({"Page": i + 1, "REF CLIENT": "❌", "Lot": "❌", "Date": "❌", "Datamatrix OK": "❌"})
+            results.append({"Page": i+1, "REF CLIENT": "❌", "Lot": "❌", "Date": "❌", "Datamatrix OK": "❌"})
 
     # Affichage des résultats
     df = pd.DataFrame(results)
