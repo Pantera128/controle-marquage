@@ -2,9 +2,7 @@ import streamlit as st
 import pytesseract
 from PIL import Image
 import fitz  # PyMuPDF
-import cv2
-import numpy as np
-from pylibdmtx.pylibdmtx import decode as decode_datamatrix
+from pyzbar.pyzbar import decode
 import re
 import io
 import pandas as pd
@@ -34,11 +32,10 @@ results = []
 def extract_text_from_image(image):
     return pytesseract.image_to_string(image)
 
-# Fonction lecture datamatrix avec pylibdmtx + OpenCV
-def read_datamatrix(pil_image):
-    cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-    decoded_objects = decode_datamatrix(cv_image)
-    return [obj.data.decode("utf-8") for obj in decoded_objects]
+# Fonction lecture datamatrix (ou autres codes-barres) avec pyzbar
+def read_datamatrix(image):
+    codes = decode(image)
+    return [code.data.decode("utf-8") for code in codes]
 
 # Analyse texte OF
 def parse_of_text(text):
@@ -50,8 +47,7 @@ def parse_of_text(text):
     for ref in refs:
         lot_list = []
         for lot in lots:
-            # Gestion des plages de lots
-            if "-" in lot and all(part.isdigit() for part in lot.split("-")):
+            if "-" in lot and lot.replace("-", "").isdigit():
                 start, end = lot.split("-")
                 lot_list.extend([str(i) for i in range(int(start), int(end)+1)])
             else:
@@ -61,7 +57,7 @@ def parse_of_text(text):
                 data.append({"REF CLIENT": ref, "Lot": lot, "Date": date})
     return data
 
-# Analyse texte PDF avec cache
+# Analyse texte PDF
 @st.cache_data
 def extract_text_from_pdf(pdf_file):
     pdf_data = []
@@ -114,7 +110,7 @@ if pdf_file and of_images:
         if not match_found:
             results.append({"Page": i+1, "REF CLIENT": "❌", "Lot": "❌", "Date": "❌", "Datamatrix OK": "❌"})
 
-    # Affichage des résultats avec surlignage des erreurs
+    # Affichage des résultats
     df = pd.DataFrame(results)
     st.subheader("📋 Résultats du contrôle")
 
@@ -128,3 +124,7 @@ if pdf_file and of_images:
 
     # Export CSV
     csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("📤 Télécharger les résultats au format CSV", csv, "controle_resultats.csv", "text/csv")
+
+else:
+    st.warning("Veuillez charger à la fois un fichier PDF de marquage et au moins une image d'OF.")
